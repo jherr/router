@@ -1,7 +1,6 @@
 import * as React from 'react'
 import { useRouter } from './useRouter'
 import { functionalUpdate } from './utils'
-import { warning } from '.'
 import type { NonNullableUpdater } from './utils'
 import type { ParsedLocation } from './location'
 
@@ -68,6 +67,10 @@ const defaultGetKey = (location: ParsedLocation) => {
   return location.state.key! || location.href
 }
 
+if (typeof document !== 'undefined') {
+  ;(window as any).ignoreScroll = false
+}
+
 function restoreScroll(
   storageKey: string,
   key?: string,
@@ -85,31 +88,38 @@ function restoreScroll(
   const resolvedKey = key || window.history.state?.key
   const elementEntries = byKey[resolvedKey]
 
-  if (!elementEntries) return
-
   let windowRestored = false
+  ;(window as any).ignoreScroll = true
 
-  for (const elementSelector in elementEntries) {
-    const entry = elementEntries[elementSelector]!
-    if (elementSelector === 'window') {
-      windowRestored = true
-      window.scrollTo({
-        top: entry.scrollY,
-        left: entry.scrollX,
-        behavior,
-      })
-    } else if (elementSelector) {
-      const element = document.querySelector(elementSelector)
-      if (element) {
-        element.scrollLeft = entry.scrollX
-        element.scrollTop = entry.scrollY
+  if (elementEntries) {
+    for (const elementSelector in elementEntries) {
+      const entry = elementEntries[elementSelector]!
+      if (elementSelector === 'window') {
+        windowRestored = true
+        window.scrollTo({
+          top: entry.scrollY,
+          left: entry.scrollX,
+          behavior,
+        })
+      } else if (elementSelector) {
+        const element = document.querySelector(elementSelector)
+        if (element) {
+          element.scrollLeft = entry.scrollX
+          element.scrollTop = entry.scrollY
+        }
       }
     }
   }
 
   if (!windowRestored) {
-    window.scrollTo(0, 0)
+    window.scrollTo({
+      top: 0,
+      left: 0,
+      behavior,
+    })
   }
+
+  ;(window as any).ignoreScroll = false
 }
 
 function useScrollRestoration(options?: ScrollRestorationOptions) {
@@ -121,28 +131,49 @@ function useScrollRestoration(options?: ScrollRestorationOptions) {
     const { history } = window
     history.scrollRestoration = 'manual'
 
-    let isMutationScroll = false
-
     // Create a MutationObserver to monitor DOM changes
     const mutationObserver = new MutationObserver(() => {
-      isMutationScroll = true
+      ;(window as any).ignoreScroll = true
       requestAnimationFrame(() => {
-        isMutationScroll = false
+        ;(window as any).ignoreScroll = false
+
+        // Attempt to restore scroll position on each dom
+        // mutation until the user scrolls. We do this
+        // because dynamic content may come in at different
+        // ticks after the initial render and we want to
+        // keep up with that content as much as possible.
+        // As soon as the user scrolls, we no longer need
+        // to attempt this.
+        restoreScroll(
+          storageKey,
+          getKey(router.state.resolvedLocation),
+          options?.scrollBehavior,
+        )
       })
     })
 
-    // Observe changes to the entire document
-    mutationObserver.observe(document, {
-      childList: true, // Detect added or removed child nodes
-      subtree: true, // Monitor all descendants
-      characterData: true, // Detect text content changes
-    })
+    const observeDom = () => {
+      // Observe changes to the entire document
+      mutationObserver.observe(document, {
+        childList: true, // Detect added or removed child nodes
+        subtree: true, // Monitor all descendants
+        characterData: true, // Detect text content changes
+      })
+    }
+
+    const unobserveDom = () => {
+      mutationObserver.disconnect()
+    }
+
+    observeDom()
 
     const onScroll = (event: Event) => {
-      if (isMutationScroll) {
-        isMutationScroll = false
+      if ((window as any).ignoreScroll) {
         return
       }
+
+      unobserveDom()
+
       let elementSelector = ''
 
       if (event.target === document || event.target === window) {
@@ -159,7 +190,7 @@ function useScrollRestoration(options?: ScrollRestorationOptions) {
         }
       }
 
-      const restoreKey = getKey(router.state.resolvedLocation)
+      const restoreKey = getKey(router.state.location)
 
       cache.set((state) => {
         const keyEntry = (state[restoreKey] =
@@ -194,6 +225,7 @@ function useScrollRestoration(options?: ScrollRestorationOptions) {
       }
 
       router.resetNextScroll = true
+
       restoreScroll(
         storageKey,
         getKey(event.toLocation),
@@ -208,7 +240,7 @@ function useScrollRestoration(options?: ScrollRestorationOptions) {
     )
 
     return () => {
-      mutationObserver.disconnect()
+      unobserveDom()
       document.removeEventListener('scroll', throttle(onScroll, 100))
       unsubOnResolved()
     }
@@ -230,20 +262,46 @@ export function ScrollRestoration(props: ScrollRestorationOptions) {
 
   return (
     <script
-      // className="tsr-once"
       suppressHydrationWarning
       dangerouslySetInnerHTML={{
         __html: `(${restoreScroll.toString()})(${JSON.stringify(storageKey)},${JSON.stringify(resolvedKey)});__TSR__.cleanScripts()`,
       }}
     />
-    // <ScriptOnce
-    //   children={`(${restoreScroll.toString()})(${JSON.stringify(storageKey)},${JSON.stringify(resolvedKey)})`}
-    // />
   )
 }
 
-export function useElementScrollRestoration() {
-  warning(false, 'useElementScrollRestoration has been deprecated')
+export function useElementScrollRestoration(
+  options: (
+    | {
+        id: string
+        getElement?: () => Element | undefined | null
+      }
+    | {
+        id?: string
+        getElement: () => Element | undefined | null
+      }
+  ) & {
+    getKey?: (location: ParsedLocation) => string
+  },
+) {
+  const router = useRouter()
+  const getKey = options.getKey || defaultGetKey
+
+  let elementSelector = ''
+
+  if (options.id) {
+    elementSelector = `[data-scroll-restoration-id="${options.id}"]`
+  } else {
+    const element = options.getElement?.()
+    if (!element) {
+      return
+    }
+    elementSelector = getCssSelector(element)
+  }
+
+  const restoreKey = getKey(router.latestLocation)
+  const byKey = cache.state[restoreKey]
+  return byKey?.[elementSelector]
 }
 
 function getCssSelector(el: any): string {
