@@ -2,12 +2,13 @@ import { useRouter, useRouterState, warning } from '@tanstack/react-router'
 import { Asset } from './Asset'
 import type { RouterManagedTag } from '@tanstack/react-router'
 
+type RouterManagedScript = RouterManagedTag & { key: string }
 export const Scripts = () => {
   const router = useRouter()
 
   const assetScripts = useRouterState({
     select: (state) => {
-      const assetScripts: Array<RouterManagedTag> = []
+      const assetScripts: Array<RouterManagedScript> = []
       const manifest = router.ssr?.manifest
 
       if (!manifest) {
@@ -25,7 +26,8 @@ export const Scripts = () => {
                 tag: 'script',
                 attrs: asset.attrs,
                 children: asset.children,
-              } as any)
+                key: `${route.id}-${asset.attrs?.src || asset.children}`,
+              })
             }),
         )
 
@@ -41,24 +43,27 @@ export const Scripts = () => {
           .map((match) => match.scripts!)
           .flat(1)
           .filter(Boolean) as Array<RouterManagedTag>
-      ).map(({ children, ...script }) => ({
-        tag: 'script',
-        attrs: {
-          ...script,
-          suppressHydrationWarning: true,
-        },
-        children,
-      })),
+      ).map(({ children, ...script }) => {
+        const managedScript: RouterManagedScript = {
+          tag: 'script',
+          attrs: {
+            ...script,
+            suppressHydrationWarning: true,
+          },
+          children,
+          key: script.attrs?.src || (script as any).children || '',
+        }
+        return managedScript
+      }),
     }),
   })
 
-  const allScripts = [...scripts, ...assetScripts] as Array<RouterManagedTag>
+  const allScripts = [...scripts, ...assetScripts]
 
   return (
     <>
-      {allScripts.map((asset, i) => (
-        // eslint-disable-next-line @eslint-react/no-array-index-key
-        <Asset {...asset} key={`tsr-scripts-${asset.tag}-${i}`} />
+      {allScripts.map((asset) => (
+        <Asset {...asset} key={asset.key} />
       ))}
     </>
   )

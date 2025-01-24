@@ -24,7 +24,7 @@ export function Asset({ tag, attrs, children }: RouterManagedTag): any {
       if ((attrs as any) && (attrs as any).src) {
         return <script {...attrs} suppressHydrationWarning />
       }
-      if (typeof children === 'string')
+      if (typeof children === 'string') {
         return (
           <script
             {...attrs}
@@ -34,6 +34,7 @@ export function Asset({ tag, attrs, children }: RouterManagedTag): any {
             suppressHydrationWarning
           />
         )
+      }
       return null
     default:
       return null
